@@ -43,7 +43,8 @@ type dlqRouter struct {
 }
 
 func newDlqRouter(client Client, policy *DLQPolicy, topicName, subscriptionName, consumerName string,
-	backOffPolicyFunc func() backoff.Policy, logger log.Logger) (*dlqRouter, error) {
+	backOffPolicyFunc func() backoff.Policy, logger log.Logger,
+) (*dlqRouter, error) {
 	var boFunc func() backoff.Policy
 	if backOffPolicyFunc != nil {
 		boFunc = backOffPolicyFunc
@@ -136,7 +137,7 @@ func (r *dlqRouter) run() {
 					// if we'd try to ack.
 					go cm.Consumer.AckID(msgID)
 				} else {
-					r.log.WithError(err).WithField("msgID", msgID).Debug("Failed to send message to DLQ")
+					r.log.WithError(err).WithField("msgID", msgID).Error("Failed to send message to DLQ")
 					go cm.Consumer.Nack(cm)
 				}
 			})
