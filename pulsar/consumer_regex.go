@@ -50,8 +50,6 @@ type regexConsumer struct {
 
 	consumersLock sync.Mutex
 	consumers     map[string]Consumer
-	subscribeCh   chan []string
-	unsubscribeCh chan []string
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
@@ -75,9 +73,7 @@ func newRegexConsumer(c *client, opts ConsumerOptions, tn *internal.TopicName, p
 		namespace: tn.Namespace,
 		pattern:   pattern,
 
-		consumers:     make(map[string]Consumer),
-		subscribeCh:   make(chan []string, 1),
-		unsubscribeCh: make(chan []string, 1),
+		consumers: make(map[string]Consumer),
 
 		closeCh: make(chan struct{}),
 
@@ -137,6 +133,33 @@ func (c *regexConsumer) Unsubscribe() error {
 	return errs
 }
 
+func (c *regexConsumer) UnsubscribeForce() error {
+	var errs error
+	c.consumersLock.Lock()
+	defer c.consumersLock.Unlock()
+
+	for topic, consumer := range c.consumers {
+		if err := consumer.UnsubscribeForce(); err != nil {
+			msg := fmt.Sprintf("unable to force unsubscribe from topic=%s subscription=%s",
+				topic, c.Subscription())
+			errs = pkgerrors.Wrap(err, msg)
+		}
+	}
+	return errs
+}
+
+func (c *regexConsumer) GetLastMessageIDs() ([]TopicMessageID, error) {
+	ids := make([]TopicMessageID, 0)
+	for _, c := range c.consumers {
+		id, err := c.GetLastMessageIDs()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id...)
+	}
+	return ids, nil
+}
+
 func (c *regexConsumer) Receive(ctx context.Context) (message Message, err error) {
 	for {
 		select {
@@ -163,12 +186,11 @@ func (c *regexConsumer) Ack(msg Message) error {
 	return c.AckID(msg.ID())
 }
 
-func (c *regexConsumer) ReconsumeLater(msg Message, delay time.Duration) {
+func (c *regexConsumer) ReconsumeLater(_ Message, _ time.Duration) {
 	c.log.Warnf("regexp consumer not support ReconsumeLater yet.")
 }
 
-func (c *regexConsumer) ReconsumeLaterWithCustomProperties(msg Message, customProperties map[string]string,
-	delay time.Duration) {
+func (c *regexConsumer) ReconsumeLaterWithCustomProperties(_ Message, _ map[string]string, _ time.Duration) {
 	c.log.Warnf("regexp consumer not support ReconsumeLaterWithCustomProperties yet.")
 }
 
@@ -191,6 +213,18 @@ func (c *regexConsumer) AckID(msgID MessageID) error {
 	}
 
 	return mid.consumer.AckID(msgID)
+}
+
+func (c *regexConsumer) AckIDList(msgIDs []MessageID) error {
+	return ackIDListFromMultiTopics(c.log, msgIDs, func(msgID MessageID) (acker, error) {
+		if !checkMessageIDType(msgID) {
+			return nil, fmt.Errorf("invalid message id type %T", msgID)
+		}
+		if mid := toTrackingMessageID(msgID); mid.consumer != nil {
+			return mid.consumer, nil
+		}
+		return nil, errors.New("consumer is nil in consumer_regex")
+	})
 }
 
 // AckID the consumption of a single message, identified by its MessageID
@@ -297,11 +331,11 @@ func (c *regexConsumer) Close() {
 	})
 }
 
-func (c *regexConsumer) Seek(msgID MessageID) error {
+func (c *regexConsumer) Seek(_ MessageID) error {
 	return newError(SeekFailed, "seek command not allowed for regex consumer")
 }
 
-func (c *regexConsumer) SeekByTime(time time.Time) error {
+func (c *regexConsumer) SeekByTime(_ time.Time) error {
 	return newError(SeekFailed, "seek command not allowed for regex consumer")
 }
 
@@ -329,14 +363,6 @@ func (c *regexConsumer) monitor() {
 			if !c.closed() {
 				c.discover()
 			}
-		case topics := <-c.subscribeCh:
-			if len(topics) > 0 && !c.closed() {
-				c.subscribe(topics, c.dlq, c.rlq)
-			}
-		case topics := <-c.unsubscribeCh:
-			if len(topics) > 0 && !c.closed() {
-				c.unsubscribe(topics)
-			}
 		}
 	}
 }
@@ -358,8 +384,12 @@ func (c *regexConsumer) discover() {
 		}).
 		Debug("discover topics")
 
-	c.unsubscribeCh <- staleTopics
-	c.subscribeCh <- newTopics
+	if len(staleTopics) > 0 {
+		c.unsubscribe(staleTopics)
+	}
+	if len(newTopics) > 0 {
+		c.subscribe(newTopics, c.dlq, c.rlq)
+	}
 }
 
 func (c *regexConsumer) knownTopics() []string {

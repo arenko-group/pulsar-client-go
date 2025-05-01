@@ -55,7 +55,7 @@ func TestTableView(t *testing.T) {
 		t.Log(key)
 		_, err = producer.Send(context.Background(), &ProducerMessage{
 			Key:   key,
-			Value: fmt.Sprintf(valuePrefix + key),
+			Value: valuePrefix + key,
 		})
 		assert.NoError(t, err)
 	}
@@ -88,14 +88,21 @@ func TestTableViewSchemas(t *testing.T) {
 		schemaType    interface{}
 		producerValue interface{}
 		expValueOut   interface{}
-		valueCheck    func(t *testing.T, got any) // Overrides expValueOut for more complex checks
+		valueCheck    func(t *testing.T, got interface{}) // Overrides expValueOut for more complex checks
 	}{
+		{
+			name:          "BytesSchema",
+			schema:        NewBytesSchema(nil),
+			schemaType:    []byte(`any`),
+			producerValue: []byte(`hello pulsar`),
+			expValueOut:   []byte(`hello pulsar`),
+		},
 		{
 			name:          "StringSchema",
 			schema:        NewStringSchema(nil),
-			schemaType:    pointer("hello pulsar"),
+			schemaType:    strPointer("hello pulsar"),
 			producerValue: "hello pulsar",
-			expValueOut:   pointer("hello pulsar"),
+			expValueOut:   strPointer("hello pulsar"),
 		},
 		{
 			name:          "JSONSchema",
@@ -107,9 +114,9 @@ func TestTableViewSchemas(t *testing.T) {
 		{
 			name:          "JSONSchema pointer type",
 			schema:        NewJSONSchema(exampleSchemaDef, nil),
-			schemaType:    pointer(testJSON{ID: 1, Name: "Pulsar"}),
+			schemaType:    &testJSON{ID: 1, Name: "Pulsar"},
 			producerValue: testJSON{ID: 1, Name: "Pulsar"},
-			expValueOut:   pointer(testJSON{ID: 1, Name: "Pulsar"}),
+			expValueOut:   &testJSON{ID: 1, Name: "Pulsar"},
 		},
 		{
 			name:          "AvroSchema",
@@ -165,14 +172,10 @@ func TestTableViewSchemas(t *testing.T) {
 			schema:        NewProtoSchema(protoSchemaDef, nil),
 			schemaType:    pb.Test{},
 			producerValue: &pb.Test{Num: 1, Msf: "Pulsar"},
-			valueCheck: func(t *testing.T, got any) {
+			valueCheck: func(t *testing.T, got interface{}) {
 				assert.IsType(t, pb.Test{}, got)
-
-				pbt, ok := got.(pb.Test)
-				if assert.Truef(t, ok, "expected type pb.Test got %T", got) {
-					assert.Equal(t, int32(1), pbt.Num)
-					assert.Equal(t, "Pulsar", pbt.Msf)
-				}
+				assert.Equal(t, int32(1), got.(pb.Test).Num)
+				assert.Equal(t, "Pulsar", got.(pb.Test).Msf)
 			},
 		},
 		{
@@ -180,14 +183,10 @@ func TestTableViewSchemas(t *testing.T) {
 			schema:        NewProtoNativeSchemaWithMessage(&pb.Test{}, nil),
 			schemaType:    pb.Test{},
 			producerValue: &pb.Test{Num: 1, Msf: "Pulsar"},
-			valueCheck: func(t *testing.T, got any) {
+			valueCheck: func(t *testing.T, got interface{}) {
 				assert.IsType(t, pb.Test{}, got)
-
-				pbt, ok := got.(pb.Test)
-				if assert.Truef(t, ok, "expected type pb.Test got %T", got) {
-					assert.Equal(t, int32(1), pbt.Num)
-					assert.Equal(t, "Pulsar", pbt.Msf)
-				}
+				assert.Equal(t, int32(1), got.(pb.Test).Num)
+				assert.Equal(t, "Pulsar", got.(pb.Test).Msf)
 			},
 		},
 	}
@@ -236,8 +235,8 @@ func TestTableViewSchemas(t *testing.T) {
 	}
 }
 
-func pointer[T any](v T) *T {
-	return &v
+func strPointer(s string) *string {
+	return &s
 }
 
 func TestPublishNilValue(t *testing.T) {
@@ -330,7 +329,7 @@ func TestForEachAndListenJSONSchema(t *testing.T) {
 		t.Log("foreach" + key)
 		s, ok := value.(testJSON)
 		assert.Truef(t, ok, "expected value to be testJSON type got %T", value)
-		assert.Equal(t, fmt.Sprintf(valuePrefix+key), s.Name)
+		assert.Equal(t, valuePrefix+key, s.Name)
 		return nil
 	})
 
@@ -350,7 +349,7 @@ func TestForEachAndListenJSONSchema(t *testing.T) {
 			Key: key,
 			Value: testJSON{
 				ID:   i,
-				Name: fmt.Sprintf(valuePrefix + key),
+				Name: valuePrefix + key,
 			},
 		})
 		assert.NoError(t, err)

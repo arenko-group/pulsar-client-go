@@ -23,8 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar/backoff"
+
 	"github.com/apache/pulsar-client-go/pulsar/crypto"
+	"github.com/apache/pulsar-client-go/pulsaradmin"
+	"github.com/apache/pulsar-client-go/pulsaradmin/pkg/admin/config"
+	"github.com/apache/pulsar-client-go/pulsaradmin/pkg/utils"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -90,10 +96,10 @@ func TestReaderConfigChunk(t *testing.T) {
 	defer r1.Close()
 
 	// verify specified chunk options
-	pcOpts := r1.(*reader).pc.options
-	assert.Equal(t, 50, pcOpts.maxPendingChunkedMessage)
-	assert.Equal(t, 30*time.Second, pcOpts.expireTimeOfIncompleteChunk)
-	assert.True(t, pcOpts.autoAckIncompleteChunk)
+	pcOpts := r1.(*reader).c.options
+	assert.Equal(t, 50, pcOpts.MaxPendingChunkedMessage)
+	assert.Equal(t, 30*time.Second, pcOpts.ExpireTimeOfIncompleteChunk)
+	assert.True(t, pcOpts.AutoAckIncompleteChunk)
 
 	r2, err := client.CreateReader(ReaderOptions{
 		Topic:          "my-topic2",
@@ -103,10 +109,10 @@ func TestReaderConfigChunk(t *testing.T) {
 	defer r2.Close()
 
 	// verify default chunk options
-	pcOpts = r2.(*reader).pc.options
-	assert.Equal(t, 100, pcOpts.maxPendingChunkedMessage)
-	assert.Equal(t, time.Minute, pcOpts.expireTimeOfIncompleteChunk)
-	assert.False(t, pcOpts.autoAckIncompleteChunk)
+	pcOpts = r2.(*reader).c.options
+	assert.Equal(t, 100, pcOpts.MaxPendingChunkedMessage)
+	assert.Equal(t, time.Minute, pcOpts.ExpireTimeOfIncompleteChunk)
+	assert.False(t, pcOpts.AutoAckIncompleteChunk)
 }
 
 func TestReader(t *testing.T) {
@@ -120,6 +126,50 @@ func TestReader(t *testing.T) {
 	topic := newTopicName()
 	ctx := context.Background()
 
+	// create reader
+	reader, err := client.CreateReader(ReaderOptions{
+		Topic:          topic,
+		StartMessageID: EarliestMessageID(),
+	})
+	assert.Nil(t, err)
+	defer reader.Close()
+
+	// create producer
+	producer, err := client.CreateProducer(ProducerOptions{
+		Topic: topic,
+	})
+	assert.Nil(t, err)
+	defer producer.Close()
+
+	// send 10 messages
+	for i := 0; i < 10; i++ {
+		_, err := producer.Send(ctx, &ProducerMessage{
+			Payload: []byte(fmt.Sprintf("hello-%d", i)),
+		})
+		assert.NoError(t, err)
+	}
+
+	// receive 10 messages
+	for i := 0; i < 10; i++ {
+		msg, err := reader.Next(context.Background())
+		assert.NoError(t, err)
+
+		expectMsg := fmt.Sprintf("hello-%d", i)
+		assert.Equal(t, []byte(expectMsg), msg.Payload())
+	}
+}
+
+func TestReaderOnPartitionedTopic(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL: lookupURL,
+	})
+
+	assert.Nil(t, err)
+	defer client.Close()
+
+	topic := newTopicName()
+	assert.Nil(t, createPartitionedTopic(topic, 3))
+	ctx := context.Background()
 	// create reader
 	reader, err := client.CreateReader(ReaderOptions{
 		Topic:          topic,
@@ -171,7 +221,7 @@ func TestReaderConnectError(t *testing.T) {
 	assert.Nil(t, reader)
 	assert.NotNil(t, err)
 
-	assert.Equal(t, err.Error(), "connection error")
+	assert.ErrorContains(t, err, "connection error")
 }
 
 func TestReaderOnSpecificMessage(t *testing.T) {
@@ -270,14 +320,14 @@ func TestReaderOnSpecificMessageWithBatching(t *testing.T) {
 
 		producer.SendAsync(ctx, &ProducerMessage{
 			Payload: []byte(fmt.Sprintf("hello-%d", i)),
-		}, func(id MessageID, producerMessage *ProducerMessage, err error) {
+		}, func(id MessageID, _ *ProducerMessage, err error) {
 			assert.NoError(t, err)
 			assert.NotNil(t, id)
 			msgIDs[idx] = id
 		})
 	}
 
-	err = producer.Flush()
+	err = producer.FlushWithCtx(context.Background())
 	assert.NoError(t, err)
 
 	// create reader on 5th message (not included)
@@ -346,14 +396,14 @@ func TestReaderOnLatestWithBatching(t *testing.T) {
 
 		producer.SendAsync(ctx, &ProducerMessage{
 			Payload: []byte(fmt.Sprintf("hello-%d", i)),
-		}, func(id MessageID, producerMessage *ProducerMessage, err error) {
+		}, func(id MessageID, _ *ProducerMessage, err error) {
 			assert.NoError(t, err)
 			assert.NotNil(t, id)
 			msgIDs[idx] = id
 		})
 	}
 
-	err = producer.Flush()
+	err = producer.FlushWithCtx(context.Background())
 	assert.NoError(t, err)
 
 	// create reader on 5th message (not included)
@@ -422,7 +472,6 @@ func TestReaderHasNext(t *testing.T) {
 		assert.NotNil(t, msgID)
 	}
 
-	// create reader on 5th message (not included)
 	reader, err := client.CreateReader(ReaderOptions{
 		Topic:          topic,
 		StartMessageID: EarliestMessageID(),
@@ -592,7 +641,7 @@ func TestReaderSeek(t *testing.T) {
 			seekID = id
 		}
 	}
-	err = producer.Flush()
+	err = producer.FlushWithCtx(context.Background())
 	assert.NoError(t, err)
 
 	for i := 0; i < N; i++ {
@@ -675,58 +724,6 @@ func TestReaderLatestInclusiveHasNext(t *testing.T) {
 	assert.Equal(t, lastMsgID.Serialize(), msg.ID().Serialize())
 
 	assert.False(t, reader.HasNext())
-}
-
-func TestReaderWithMultiHosts(t *testing.T) {
-	// Multi hosts included an unreached port and the actual port for verify retry logic
-	client, err := NewClient(ClientOptions{
-		URL: "pulsar://localhost:6600,localhost:6650",
-	})
-
-	assert.Nil(t, err)
-	defer client.Close()
-
-	topic := newTopicName()
-	ctx := context.Background()
-
-	// create producer
-	producer, err := client.CreateProducer(ProducerOptions{
-		Topic:           topic,
-		DisableBatching: true,
-	})
-	assert.Nil(t, err)
-	defer producer.Close()
-
-	// send 10 messages
-	for i := 0; i < 10; i++ {
-		msgID, err := producer.Send(ctx, &ProducerMessage{
-			Payload: []byte(fmt.Sprintf("hello-%d", i)),
-		})
-		assert.NoError(t, err)
-		assert.NotNil(t, msgID)
-	}
-
-	// create reader on 5th message (not included)
-	reader, err := client.CreateReader(ReaderOptions{
-		Topic:          topic,
-		StartMessageID: EarliestMessageID(),
-	})
-
-	assert.Nil(t, err)
-	defer reader.Close()
-
-	i := 0
-	for reader.HasNext() {
-		msg, err := reader.Next(context.Background())
-		assert.NoError(t, err)
-
-		expectMsg := fmt.Sprintf("hello-%d", i)
-		assert.Equal(t, []byte(expectMsg), msg.Payload())
-
-		i++
-	}
-
-	assert.Equal(t, 10, i)
 }
 
 func TestProducerReaderRSAEncryption(t *testing.T) {
@@ -852,6 +849,13 @@ func (b *testBackoffPolicy) Next() time.Duration {
 
 	return b.curBackoff
 }
+func (b *testBackoffPolicy) IsMaxBackoffReached() bool {
+	return false
+}
+
+func (b *testBackoffPolicy) Reset() {
+
+}
 
 func (b *testBackoffPolicy) IsExpectedIntervalFrom(startTime time.Time) bool {
 	// Approximately equal to expected interval
@@ -871,35 +875,37 @@ func TestReaderWithBackoffPolicy(t *testing.T) {
 	assert.Nil(t, err)
 	defer client.Close()
 
-	backoff := newTestBackoffPolicy(1*time.Second, 4*time.Second)
+	bo := newTestBackoffPolicy(1*time.Second, 4*time.Second)
 	_reader, err := client.CreateReader(ReaderOptions{
 		Topic:          "my-topic",
 		StartMessageID: LatestMessageID(),
-		BackoffPolicy:  backoff,
+		BackoffPolicyFunc: func() backoff.Policy {
+			return bo
+		},
 	})
 	assert.NotNil(t, _reader)
 	assert.Nil(t, err)
 
-	partitionConsumerImp := _reader.(*reader).pc
+	partitionConsumerImp := _reader.(*reader).c.consumers[0]
 	// 1 s
 	startTime := time.Now()
-	partitionConsumerImp.reconnectToBroker()
-	assert.True(t, backoff.IsExpectedIntervalFrom(startTime))
+	partitionConsumerImp.reconnectToBroker(nil)
+	assert.True(t, bo.IsExpectedIntervalFrom(startTime))
 
 	// 2 s
 	startTime = time.Now()
-	partitionConsumerImp.reconnectToBroker()
-	assert.True(t, backoff.IsExpectedIntervalFrom(startTime))
+	partitionConsumerImp.reconnectToBroker(nil)
+	assert.True(t, bo.IsExpectedIntervalFrom(startTime))
 
 	// 4 s
 	startTime = time.Now()
-	partitionConsumerImp.reconnectToBroker()
-	assert.True(t, backoff.IsExpectedIntervalFrom(startTime))
+	partitionConsumerImp.reconnectToBroker(nil)
+	assert.True(t, bo.IsExpectedIntervalFrom(startTime))
 
 	// 4 s
 	startTime = time.Now()
-	partitionConsumerImp.reconnectToBroker()
-	assert.True(t, backoff.IsExpectedIntervalFrom(startTime))
+	partitionConsumerImp.reconnectToBroker(nil)
+	assert.True(t, bo.IsExpectedIntervalFrom(startTime))
 }
 
 func TestReaderGetLastMessageID(t *testing.T) {
@@ -942,4 +948,292 @@ func TestReaderGetLastMessageID(t *testing.T) {
 
 	assert.Equal(t, lastMsgID.LedgerID(), getLastMessageID.LedgerID())
 	assert.Equal(t, lastMsgID.EntryID(), getLastMessageID.EntryID())
+}
+
+func TestReaderGetLastMessageIDOnMultiTopics(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL: serviceURL,
+	})
+	assert.Nil(t, err)
+	topic := newTopicName()
+	assert.Nil(t, createPartitionedTopic(topic, 3))
+
+	reader, err := client.CreateReader(ReaderOptions{
+		Topic:          topic,
+		StartMessageID: EarliestMessageID(),
+	})
+	assert.Nil(t, err)
+	_, err = reader.GetLastMessageID()
+	assert.NotNil(t, err)
+}
+
+func createPartitionedTopic(topic string, n int) error {
+	admin, err := pulsaradmin.NewClient(&config.Config{})
+	if err != nil {
+		return err
+	}
+
+	topicName, err := utils.GetTopicName(topic)
+	if err != nil {
+		return err
+	}
+	err = admin.Topics().Create(*topicName, n)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func TestReaderHasNextFailed(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL: serviceURL,
+	})
+	assert.Nil(t, err)
+	topic := newTopicName()
+	r, err := client.CreateReader(ReaderOptions{
+		Topic:          topic,
+		StartMessageID: EarliestMessageID(),
+	})
+	assert.Nil(t, err)
+	r.(*reader).c.consumers[0].state.Store(consumerClosing)
+	assert.False(t, r.HasNext())
+}
+
+func TestReaderHasNextRetryFailed(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL:              serviceURL,
+		OperationTimeout: 2 * time.Second,
+	})
+	assert.Nil(t, err)
+	topic := newTopicName()
+	r, err := client.CreateReader(ReaderOptions{
+		Topic:          topic,
+		StartMessageID: EarliestMessageID(),
+	})
+	assert.Nil(t, err)
+
+	c := make(chan interface{})
+	defer close(c)
+
+	// Close the consumer events loop and assign a mock eventsCh
+	pc := r.(*reader).c.consumers[0]
+	pc.Close()
+	pc.state.Store(consumerReady)
+	pc.eventsCh = c
+
+	go func() {
+		for e := range c {
+			req, ok := e.(*getLastMsgIDRequest)
+			assert.True(t, ok, "unexpected event type")
+			req.err = errors.New("expected error")
+			close(req.doneCh)
+		}
+	}()
+	minTimer := time.NewTimer(1 * time.Second) // Timer to check if r.HasNext() blocked for at least 1s
+	maxTimer := time.NewTimer(3 * time.Second) // Timer to ensure r.HasNext() doesn't block for more than 3s
+	done := make(chan bool)
+	go func() {
+		assert.False(t, r.HasNext())
+		done <- true
+	}()
+
+	select {
+	case <-maxTimer.C:
+		t.Fatal("r.HasNext() blocked for more than 3s")
+	case <-done:
+		assert.False(t, minTimer.Stop(), "r.HasNext() did not block for at least 1s")
+		assert.True(t, maxTimer.Stop())
+	}
+
+}
+
+func TestReaderNextReturnsOnClosedConsumer(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL:              serviceURL,
+		OperationTimeout: 2 * time.Second,
+	})
+	assert.NoError(t, err)
+	topic := newTopicName()
+	reader, err := client.CreateReader(ReaderOptions{
+		Topic:          topic,
+		StartMessageID: EarliestMessageID(),
+	})
+	assert.Nil(t, err)
+
+	reader.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var e *Error
+	_, err = reader.Next(ctx)
+	assert.ErrorAs(t, err, &e)
+	assert.Equal(t, ConsumerClosed, e.Result())
+}
+
+func testReaderSeekByIDWithHasNext(t *testing.T, startMessageID MessageID, startMessageIDInclusive bool) {
+	client, err := NewClient(ClientOptions{
+		URL: lookupURL,
+	})
+
+	assert.Nil(t, err)
+	defer client.Close()
+
+	topic := newTopicName()
+	ctx := context.Background()
+
+	// create producer
+	producer, err := client.CreateProducer(ProducerOptions{
+		Topic:           topic,
+		DisableBatching: true,
+	})
+	assert.Nil(t, err)
+	defer producer.Close()
+
+	// send 100 messages
+	var lastMsgID MessageID
+	for i := 0; i < 10; i++ {
+		lastMsgID, err = producer.Send(ctx, &ProducerMessage{
+			Payload: []byte(fmt.Sprintf("hello-%d", i)),
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, lastMsgID)
+	}
+
+	reader, err := client.CreateReader(ReaderOptions{
+		Topic:                   topic,
+		StartMessageID:          startMessageID,
+		StartMessageIDInclusive: startMessageIDInclusive,
+	})
+	assert.Nil(t, err)
+	defer reader.Close()
+
+	// Seek to last message ID
+	err = reader.Seek(lastMsgID)
+	assert.NoError(t, err)
+
+	if startMessageIDInclusive {
+		assert.True(t, reader.HasNext())
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		msg, err := reader.Next(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, msg)
+		assert.True(t, messageIDCompare(lastMsgID, msg.ID()) == 0)
+		cancel()
+	} else {
+		assert.False(t, reader.HasNext())
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		msg, err := reader.Next(ctx)
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		cancel()
+	}
+
+}
+
+func TestReaderWithSeekByID(t *testing.T) {
+	params := []struct {
+		messageID               MessageID
+		startMessageIDInclusive bool
+	}{
+		{EarliestMessageID(), false},
+		{EarliestMessageID(), true},
+		{LatestMessageID(), false},
+		{LatestMessageID(), true},
+	}
+
+	for _, c := range params {
+		t.Run(fmt.Sprintf("TestReaderSeekByID_%v_%v", c.messageID, c.startMessageIDInclusive),
+			func(t *testing.T) {
+				testReaderSeekByIDWithHasNext(t, c.messageID, c.startMessageIDInclusive)
+			})
+	}
+}
+
+func testReaderSeekByTimeWithHasNext(t *testing.T, startMessageID MessageID) {
+	client, err := NewClient(ClientOptions{
+		URL: lookupURL,
+	})
+
+	assert.Nil(t, err)
+	defer client.Close()
+
+	topic := newTopicName()
+	ctx := context.Background()
+
+	// create producer
+	producer, err := client.CreateProducer(ProducerOptions{
+		Topic:           topic,
+		DisableBatching: true,
+	})
+	assert.Nil(t, err)
+	defer producer.Close()
+
+	// 1. send 10 messages
+	var lastMsgID MessageID
+	for i := 0; i < 10; i++ {
+		lastMsgID, err = producer.Send(ctx, &ProducerMessage{
+			Payload: []byte(fmt.Sprintf("hello-%d", i)),
+		})
+		assert.NoError(t, err)
+
+		assert.NotNil(t, lastMsgID)
+	}
+
+	// 2. create reader
+	reader, err := client.CreateReader(ReaderOptions{
+		Topic:                   topic,
+		StartMessageID:          startMessageID,
+		StartMessageIDInclusive: false,
+	})
+	assert.Nil(t, err)
+	defer reader.Close()
+
+	// 3. Seek time to now
+	reader.SeekByTime(time.Now())
+
+	// 4. Should not receive msg
+	{
+		assert.False(t, reader.HasNext())
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		msg, err := reader.Next(timeoutCtx)
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		cancel()
+	}
+
+	// 5. send more 10 messages
+	for i := 0; i < 10; i++ {
+		lastMsgID, err = producer.Send(ctx, &ProducerMessage{
+			Payload: []byte(fmt.Sprintf("hello2-%d", i)),
+		})
+		assert.NoError(t, err)
+		assert.NotNil(t, lastMsgID)
+	}
+
+	// 6. Assert these messages are received
+	for i := 0; i < 10; i++ {
+		assert.True(t, reader.HasNext())
+		msg, err := reader.Next(context.Background())
+		assert.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("hello2-%d", i), string(msg.Payload()))
+	}
+
+	// assert not more msg
+	{
+		assert.False(t, reader.HasNext())
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		msg, err := reader.Next(timeoutCtx)
+		assert.Error(t, err)
+		assert.Nil(t, msg)
+		cancel()
+	}
+}
+func TestReaderWithSeekByTime(t *testing.T) {
+	startMessageIDs := []MessageID{EarliestMessageID(), LatestMessageID()}
+	for _, startMsgID := range startMessageIDs {
+		t.Run(fmt.Sprintf("TestReaderSeekByTime_%v", startMsgID), func(t *testing.T) {
+			testReaderSeekByTimeWithHasNext(t, startMsgID)
+		})
+	}
 }

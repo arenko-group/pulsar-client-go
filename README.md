@@ -38,11 +38,7 @@ CGo-based library.
 
 ## Requirements
 
-- Go 1.18+
-
-> **Note**:
->
-> While this library should work with Golang versions as early as 1.16, any bugs specific to versions earlier than 1.18 may not be fixed.
+- Go 1.23+
 
 ## Status
 
@@ -152,7 +148,7 @@ Run the tests:
 
 Run the tests with specific versions of GOLANG and PULSAR:
 
-    make test GOLANG_VERSION=1.18 PULSAR_VERSION=2.10.0
+    make test GO_VERSION=1.23 PULSAR_VERSION=4.0.3
 
 ## Contributing
 

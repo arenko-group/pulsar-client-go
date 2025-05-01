@@ -114,6 +114,21 @@ const (
 	TransactionNoFoundError
 	// ClientMemoryBufferIsFull client limit buffer is full
 	ClientMemoryBufferIsFull
+	// ProducerFenced When a producer asks and fail to get exclusive producer access,
+	// or loses the exclusive status after a reconnection, the broker will
+	// use this error to indicate that this producer is now permanently
+	// fenced. Applications are now supposed to close it and create a
+	// new producer
+	ProducerFenced
+	// MaxConcurrentOperationsReached indicates that the maximum number of concurrent operations
+	// has been reached. This means that no additional operations can be started until some
+	// of the current operations complete.
+	MaxConcurrentOperationsReached
+	// TransactionCoordinatorNotEnabled indicates that the transaction coordinator is not enabled.
+	// This error is returned when an operation that requires the transaction coordinator is attempted
+	// but the transaction coordinator feature is not enabled in the system or the transaction coordinator
+	// has not initialized
+	TransactionCoordinatorNotEnabled
 )
 
 // Error implement error interface, composed of two parts: msg and result.

@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/apache/pulsar-client-go/oauth2/clock"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 )
 
@@ -112,7 +112,7 @@ func ExtractUserName(token oauth2.Token) (string, error) {
 	p := jwt.Parser{}
 	claims := jwt.MapClaims{}
 	if _, _, err := p.ParseUnverified(token.AccessToken, claims); err != nil {
-		return "", fmt.Errorf("unable to decode the access token: %v", err)
+		return "", fmt.Errorf("unable to decode the access token: %w", err)
 	}
 	username, ok := claims[ClaimNameUserName]
 	if !ok {

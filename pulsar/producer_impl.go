@@ -143,7 +143,7 @@ func newProducer(client *client, options *ProducerOptions) (*producer, error) {
 				true,
 				client.log.SubLogger(log.Fields{"topic": p.topic}))
 			if err != nil {
-				return nil, fmt.Errorf("unable to get MessageCrypto instance. Producer creation is abandoned. %v", err)
+				return nil, fmt.Errorf("unable to get MessageCrypto instance. Producer creation is abandoned. %w", err)
 			}
 			p.options.Encryption.MessageCrypto = messageCrypto
 		}
@@ -334,11 +334,15 @@ func (p *producer) LastSequenceID() int64 {
 }
 
 func (p *producer) Flush() error {
+	return p.FlushWithCtx(context.Background())
+}
+
+func (p *producer) FlushWithCtx(ctx context.Context) error {
 	p.RLock()
 	defer p.RUnlock()
 
 	for _, pp := range p.producers {
-		if err := pp.Flush(); err != nil {
+		if err := pp.FlushWithCtx(ctx); err != nil {
 			return err
 		}
 

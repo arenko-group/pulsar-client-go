@@ -93,6 +93,7 @@ type FunctionData struct {
 	Secrets                      string          `json:"secretsString"`
 	DestinationFile              string          `json:"destinationFile"`
 	Path                         string          `json:"path"`
+	RuntimeFlags                 string          `json:"runtimeFlags,omitempty"`
 	FuncConf                     *FunctionConfig `json:"-"`
 }
 
@@ -138,7 +139,8 @@ type SourceData struct {
 	SourceConf *SourceConfig `json:"-,omitempty"`
 	InstanceID string        `json:"instanceId,omitempty"`
 
-	UpdateAuthData bool `json:"updateAuthData,omitempty"`
+	UpdateAuthData bool   `json:"updateAuthData,omitempty"`
+	RuntimeFlags   string `json:"runtimeFlags,omitempty"`
 }
 
 type SinkData struct {
@@ -177,6 +179,7 @@ type SinkData struct {
 	TransformFunction            string      `json:"transformFunction,omitempty"`
 	TransformFunctionClassName   string      `json:"transformFunctionClassName,omitempty"`
 	TransformFunctionConfig      string      `json:"transformFunctionConfig,omitempty"`
+	RuntimeFlags                 string      `json:"runtimeFlags,omitempty"`
 	SinkConf                     *SinkConfig `json:"-,omitempty"`
 }
 
@@ -212,7 +215,7 @@ type NamespacesData struct {
 	MessageTTL                     int      `json:"messageTTL"`
 	BookkeeperAckQuorum            int      `json:"bookkeeperAckQuorum"`
 	ManagedLedgerMaxMarkDeleteRate float64  `json:"managedLedgerMaxMarkDeleteRate"`
-	ClusterIds                     string   `json:"clusterIds"`
+	ClusterIDs                     string   `json:"clusterIds"`
 	RetentionTimeStr               string   `json:"retentionTimeStr"`
 	LimitStr                       string   `json:"limitStr"`
 	LimitTime                      int64    `json:"limitTime"`
@@ -241,31 +244,67 @@ type TopicStats struct {
 	DeDuplicationStatus string                       `json:"deduplicationStatus"`
 }
 
+type ProducerAccessMode string
+
+const (
+	ProduceModeShared               ProducerAccessMode = "Shared"
+	ProduceModeExclusive                               = "Exclusive"
+	ProduceModeExclusiveWithFencing                    = "ExclusiveWithFencing"
+	ProduceModeWaitForExclusive                        = "WaitForExclusive"
+)
+
 type PublisherStats struct {
-	ProducerID      int64             `json:"producerId"`
-	MsgRateIn       float64           `json:"msgRateIn"`
-	MsgThroughputIn float64           `json:"msgThroughputIn"`
-	AverageMsgSize  float64           `json:"averageMsgSize"`
-	Metadata        map[string]string `json:"metadata"`
+	AccessModel               ProducerAccessMode `json:"accessMode"`
+	ProducerID                int64              `json:"producerId"`
+	MsgRateIn                 float64            `json:"msgRateIn"`
+	MsgThroughputIn           float64            `json:"msgThroughputIn"`
+	AverageMsgSize            float64            `json:"averageMsgSize"`
+	ChunkedMessageRate        float64            `json:"chunkedMessageRate"`
+	IsSupportsPartialProducer bool               `json:"supportsPartialProducer"`
+	ProducerName              string             `json:"producerName"`
+	Address                   string             `json:"address"`
+	ConnectedSince            string             `json:"connectedSince"`
+	ClientVersion             string             `json:"clientVersion"`
+	Metadata                  map[string]string  `json:"metadata"`
 }
 
 type SubscriptionStats struct {
-	BlockedSubscriptionOnUnackedMsgs bool            `json:"blockedSubscriptionOnUnackedMsgs"`
-	IsReplicated                     bool            `json:"isReplicated"`
-	LastConsumedFlowTimestamp        int64           `json:"lastConsumedFlowTimestamp"`
-	LastConsumedTimestamp            int64           `json:"lastConsumedTimestamp"`
-	LastAckedTimestamp               int64           `json:"lastAckedTimestamp"`
-	MsgRateOut                       float64         `json:"msgRateOut"`
-	MsgThroughputOut                 float64         `json:"msgThroughputOut"`
-	MsgRateRedeliver                 float64         `json:"msgRateRedeliver"`
-	MsgRateExpired                   float64         `json:"msgRateExpired"`
-	MsgBacklog                       int64           `json:"msgBacklog"`
-	MsgBacklogNoDelayed              int64           `json:"msgBacklogNoDelayed"`
-	MsgDelayed                       int64           `json:"msgDelayed"`
-	UnAckedMessages                  int64           `json:"unackedMessages"`
-	SubType                          string          `json:"type"`
-	ActiveConsumerName               string          `json:"activeConsumerName"`
-	Consumers                        []ConsumerStats `json:"consumers"`
+	BlockedSubscriptionOnUnackedMsgs          bool              `json:"blockedSubscriptionOnUnackedMsgs"`
+	IsReplicated                              bool              `json:"isReplicated"`
+	LastConsumedFlowTimestamp                 int64             `json:"lastConsumedFlowTimestamp"`
+	LastConsumedTimestamp                     int64             `json:"lastConsumedTimestamp"`
+	LastAckedTimestamp                        int64             `json:"lastAckedTimestamp"`
+	MsgRateOut                                float64           `json:"msgRateOut"`
+	MsgThroughputOut                          float64           `json:"msgThroughputOut"`
+	MsgRateRedeliver                          float64           `json:"msgRateRedeliver"`
+	MsgRateExpired                            float64           `json:"msgRateExpired"`
+	MsgBacklog                                int64             `json:"msgBacklog"`
+	MsgBacklogNoDelayed                       int64             `json:"msgBacklogNoDelayed"`
+	MsgDelayed                                int64             `json:"msgDelayed"`
+	UnAckedMessages                           int64             `json:"unackedMessages"`
+	SubType                                   string            `json:"type"`
+	ActiveConsumerName                        string            `json:"activeConsumerName"`
+	BytesOutCounter                           int64             `json:"bytesOutCounter"`
+	MsgOutCounter                             int64             `json:"msgOutCounter"`
+	MessageAckRate                            float64           `json:"messageAckRate"`
+	ChunkedMessageRate                        float64           `json:"chunkedMessageRate"`
+	BacklogSize                               int64             `json:"backlogSize"`
+	EarliestMsgPublishTimeInBacklog           int64             `json:"earliestMsgPublishTimeInBacklog"`
+	TotalMsgExpired                           int64             `json:"totalMsgExpired"`
+	LastExpireTimestamp                       int64             `json:"lastExpireTimestamp"`
+	LastMarkDeleteAdvancedTimestamp           int64             `json:"lastMarkDeleteAdvancedTimestamp"`
+	Consumers                                 []ConsumerStats   `json:"consumers"`
+	IsDurable                                 bool              `json:"isDurable"`
+	AllowOutOfOrderDelivery                   bool              `json:"allowOutOfOrderDelivery"`
+	ConsumersAfterMarkDeletePosition          map[string]string `json:"consumersAfterMarkDeletePosition"`
+	NonContiguousDeletedMessagesRanges        int               `json:"nonContiguousDeletedMessagesRanges"`
+	NonContiguousDeletedMessagesRangesSrzSize int               `json:"nonContiguousDeletedMessagesRangesSerializedSize"`
+	DelayedMessageIndexSizeInBytes            int64             `json:"delayedMessageIndexSizeInBytes"`
+	SubscriptionProperties                    map[string]string `json:"subscriptionProperties"`
+	FilterProcessedMsgCount                   int64             `json:"filterProcessedMsgCount"`
+	FilterAcceptedMsgCount                    int64             `json:"filterAcceptedMsgCount"`
+	FilterRejectedMsgCount                    int64             `json:"filterRejectedMsgCount"`
+	FilterRescheduledMsgCount                 int64             `json:"filterRescheduledMsgCount"`
 }
 
 type ConsumerStats struct {
@@ -276,6 +315,17 @@ type ConsumerStats struct {
 	MsgThroughputOut             float64           `json:"msgThroughputOut"`
 	MsgRateRedeliver             float64           `json:"msgRateRedeliver"`
 	ConsumerName                 string            `json:"consumerName"`
+	BytesOutCounter              int64             `json:"bytesOutCounter"`
+	MsgOutCounter                int64             `json:"msgOutCounter"`
+	MessageAckRate               float64           `json:"messageAckRate"`
+	ChunkedMessageRate           float64           `json:"chunkedMessageRate"`
+	AvgMessagesPerEntry          int               `json:"avgMessagesPerEntry"`
+	Address                      string            `json:"address"`
+	ConnectedSince               string            `json:"connectedSince"`
+	ClientVersion                string            `json:"clientVersion"`
+	LastAckedTimestamp           int64             `json:"lastAckedTimestamp"`
+	LastConsumedTimestamp        int64             `json:"lastConsumedTimestamp"`
+	LastConsumedFlowTimestamp    int64             `json:"lastConsumedFlowTimestamp"`
 	Metadata                     map[string]string `json:"metadata"`
 }
 
@@ -464,4 +514,28 @@ type CompactedLedger struct {
 	Size            int64 `json:"size"`
 	Offloaded       bool  `json:"offloaded"`
 	UnderReplicated bool  `json:"underReplicated"`
+}
+
+type GetStatsOptions struct {
+	GetPreciseBacklog        bool `json:"get_precise_backlog"`
+	SubscriptionBacklogSize  bool `json:"subscription_backlog_size"`
+	GetEarliestTimeInBacklog bool `json:"get_earliest_time_in_backlog"`
+	ExcludePublishers        bool `json:"exclude_publishers"`
+	ExcludeConsumers         bool `json:"exclude_consumers"`
+}
+
+type BrokerInfo struct {
+	BrokerID   string `json:"brokerId"`
+	ServiceURL string `json:"serviceUrl"`
+}
+
+type TopicVersion string
+
+const (
+	TopicVersionV1 TopicVersion = "V1"
+	TopicVersionV2 TopicVersion = "V2"
+)
+
+func (t TopicVersion) String() string {
+	return string(t)
 }
